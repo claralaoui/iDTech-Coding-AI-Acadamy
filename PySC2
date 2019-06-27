@@ -1,0 +1,91 @@
+from pysc2.agents import base_agent
+from pysc2.env import sc2_env
+from pysc2.lib import actions, features
+from absl import app
+import random
+import math
+
+NO_SELECTION = 'noselection'
+MARINE_1_SETUP = 'marine1'
+MARINE_2_SETUP = 'marine2'
+PLAYING = 'playing'
+
+_NOT_QUEUED = [0]
+
+_MOVE_SCREEN = actions.FUNCTIONS.Move_screen.id
+
+
+class MineralCollector(base_agent.BaseAgent):
+    state = NO_SELECTION
+    selected = None
+    marine_1_setup = False
+    marine_2_setup = False
+    crystals = []
+    marines = []
+    marine_x = 0
+    marine_y = 0
+    turn = 1
+    select_swap = True
+
+    def step(self, obs):
+        super(MineralCollector, self).step(obs)
+
+        if self.state == NO_SELECTION:
+            self.marines = [unit for unit in obs.observation.feature_units if unit.unit_type == 48]
+            self.crystals = [cry for cry in obs.observation.feature_units if cry.unit_type != 48]
+            if len(self.marines) > 0:
+                marine = random.choice(self.marines)
+                self.state = PLAYING
+                self.selected = True
+                self.marine_x = marine.x
+                self.marine_y = marine.y
+                return actions.FUNCTIONS.select_point("select", (marine.x, marine.y))
+        elif self.state == PLAYING:
+            if len(self.crystals) > 0:
+                c_pos = []
+                distance = []
+                for crystal in self.crystals:
+                    crystal_x, crystal_y = crystal.x, crystal.y
+                    c_pos.append((crystal_x, crystal_y))
+                for c in c_pos:
+                    d = math.sqrt((self.marine_x - c[0]) ** 2 + (self.marine_y - c[1]) ** 2)
+                    distance.append(d)
+                mindex = distance.index(min(distance))
+                pos = c_pos[mindex]
+                del distance[mindex]
+                del c_pos[mindex]
+
+                self.state = NO_SELECTION
+                if _MOVE_SCREEN in obs.observation.available_actions:
+                    return actions.FunctionCall(_MOVE_SCREEN, [_NOT_QUEUED, (pos)])
+
+        return actions.FUNCTIONS.no_op()
+
+
+def main(unused_argv):
+    agent = MineralCollector()
+    try:
+        while True:
+            with sc2_env.SC2Env(
+                    map_name="CollectMineralShards",
+                    players=[sc2_env.Agent(sc2_env.Race.terran)],
+                    agent_interface_format=features.AgentInterfaceFormat(
+                        feature_dimensions=features.Dimensions(screen=84, minimap=64), use_feature_units=True),
+                    step_mul=16,
+                    game_steps_per_episode=0,
+                    visualize=True) as env:
+                agent.setup(env.observation_spec(), env.action_spec())
+                timesteps = env.reset()
+                agent.reset()
+
+                while True:
+                    step_actions = [agent.step(timesteps[0])]
+                    if timesteps[0].last():
+                        break
+                    timesteps = env.step(step_actions)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    app.run(main)
